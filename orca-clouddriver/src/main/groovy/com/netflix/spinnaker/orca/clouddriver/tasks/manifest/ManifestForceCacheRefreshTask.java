@@ -80,6 +80,7 @@ public class ManifestForceCacheRefreshTask extends AbstractCloudProviderAwareTas
                                        CloudDriverCacheStatusService cacheStatusService,
                                        ObjectMapper objectMapper) {
     this(registry, cacheService, cacheStatusService, objectMapper, Clock.systemUTC());
+    log.debug("ManifestForceCacheRefreshTask object created !!! without Clock");
   }
 
   ManifestForceCacheRefreshTask(Registry registry,
@@ -92,6 +93,7 @@ public class ManifestForceCacheRefreshTask extends AbstractCloudProviderAwareTas
     this.objectMapper = objectMapper;
     this.clock = clock;
     this.durationTimerId = registry.createId("manifestForceCacheRefreshTask.duration");
+    log.debug("ManifestForceCacheRefreshTask object created !!! with Clock {}",durationTimerId);
   }
 
   @Override
@@ -113,7 +115,10 @@ public class ManifestForceCacheRefreshTask extends AbstractCloudProviderAwareTas
     StageData stageData = fromStage(stage);
     stageData.manifestNamesByNamespace = manifestNamesByNamespace(stage);
 
+    log.debug("cloudProvider : {} Account : {} stageData : {} stageData.manifestNamesByNamespace : {}",cloudProvider,account,stageData,stageData.manifestNamesByNamespace);
+
     if (refreshManifests(cloudProvider, account, stageData)) {
+      log.debug("Inside if refreshManifests()");
       registry.timer(durationTimerId.withTags("success", "true", "outcome", "complete"))
         .record(duration, TimeUnit.MILLISECONDS);
       return new TaskResult(SUCCEEDED, toContext(stageData));
@@ -137,6 +142,10 @@ public class ManifestForceCacheRefreshTask extends AbstractCloudProviderAwareTas
         cacheStatusService.pendingForceCacheUpdates(provider, REFRESH_TYPE),
         new TypeReference<Collection<PendingRefresh>>() { }
     );
+    pendingRefreshes.forEach(x -> log.debug("checkPendingRefreshes() : pendingRefreshes : processedCount -> {} cacheTime -> {}" +
+      " processedTime -> {}  details -> {}:{}:{}"
+      ,x.processedCount,x.cacheTime,x.processedTime,x.details.name
+      ,x.details.account,x.details.location));
 
     Map<String, List<String>> deployedManifests = stageData.getManifestNamesByNamespace();
     Set<String> refreshedManifests = stageData.getRefreshedManifests();
@@ -162,6 +171,8 @@ public class ManifestForceCacheRefreshTask extends AbstractCloudProviderAwareTas
 
         if (pendingRefresh.isPresent()) {
           PendingRefresh refresh = pendingRefresh.get();
+          log.debug("Inside if pendingRefresh.isPresent() : cache :"+refresh.cacheTime+" : processed :"+refresh.processedTime
+          +" : detail :"+refresh.details.account+" ! "+refresh.details.location+ " ! "+refresh.details.name);
           // it's possible the resource isn't supposed to have a namespace -- clouddriver reports this by removing it
           // in the response. in this case, we make sure to set it to match between clouddriver and orca
           if (StringUtils.isEmpty(refresh.getDetails().getLocation())) {
@@ -196,7 +207,7 @@ public class ManifestForceCacheRefreshTask extends AbstractCloudProviderAwareTas
       refreshedManifests.remove(toManifestIdentifier(details.getLocation(), details.getName()));
       return false;
     } else if (pendingRefresh.processedTime < startTime) {
-      log.info("Pending refresh of {} was cached as a part of this request, but not processed", pendingRefresh);
+      log.info("Pending refresh of {} was cached as a part of this request, but not processed. startTime : {}", pendingRefresh,startTime);
       return false;
     } else {
       return true;
@@ -227,6 +238,7 @@ public class ManifestForceCacheRefreshTask extends AbstractCloudProviderAwareTas
 
   private boolean refreshManifests(String provider, String account, StageData stageData) {
     Map<String, List<String>> manifests = manifestsNeedingRefresh(stageData);
+    manifests.forEach((k,v) -> log.debug("refreshManifests() :  {} !!! {}",k,v));
 
     final boolean[] allRefreshesSucceeded = {true};
     for (Map.Entry<String, List<String>> entry : manifests.entrySet()) {
@@ -238,6 +250,7 @@ public class ManifestForceCacheRefreshTask extends AbstractCloudProviderAwareTas
             .put("name", name)
             .put("location", location)
             .build();
+        request.forEach((k,v) -> log.debug("refreshManifests() : request : {} !!! {}",k,v));
 
         try {
           Response response = cacheService.forceCacheUpdate(provider, REFRESH_TYPE, request);
@@ -258,6 +271,9 @@ public class ManifestForceCacheRefreshTask extends AbstractCloudProviderAwareTas
     }
 
     boolean allRefreshesProcessed = stageData.getRefreshedManifests().equals(stageData.getProcessedManifests());
+    log.debug("RefreshedManifests : {}",stageData.refreshedManifests.toArray());
+    log.debug("ProcessedManifests : {}",stageData.processedManifests.toArray());
+    log.debug("allRefreshesProcessed : {}",allRefreshesProcessed);
 
     // This can happen when the prior execution of this task returned RUNNING because one or more manifests
     // were not processed. In this case, all manifests may have been refreshed successfully without finishing processing.
